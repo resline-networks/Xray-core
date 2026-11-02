@@ -27,6 +27,10 @@ var (
 	build    = "Custom"
 	codename = "Xray, Penetrates Everything."
 	intro    = "A unified platform for anti-censorship."
+	// variant marks a resline-networks fork build in `xray version`. It sits in
+	// the trailing build-info parentheses, never in the version field, which
+	// tools parse as a plain X.Y.Z.
+	variant = "resline"
 )
 
 func init() {
@@ -66,7 +70,7 @@ func Version() string {
 // VersionStatement returns a list of strings representing the full version info.
 func VersionStatement() []string {
 	return []string{
-		serial.Concat("Xray ", Version(), " (", codename, ") ", build, " (", runtime.Version(), " ", runtime.GOOS, "/", runtime.GOARCH, ")"),
+		serial.Concat("Xray ", Version(), " (", codename, ") ", build, " (", variant, "; ", runtime.Version(), " ", runtime.GOOS, "/", runtime.GOARCH, ")"),
 		intro,
 	}
 }
