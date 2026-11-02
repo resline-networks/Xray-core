@@ -36,6 +36,38 @@ type OnlineMap interface {
 	ForEach(func(string, int64) bool)
 }
 
+// IPTraffic is the cumulative traffic of one source IP of one user.
+type IPTraffic struct {
+	IP string
+	// LastSeen is the Unix time of the latest connection opened from IP.
+	LastSeen int64
+	// Online reports whether IP still has an open connection. An offline IP is
+	// kept for a grace period so the bytes of connections that closed between
+	// two polls can still be read.
+	Online bool
+	// Counted reports whether bytes are accounted for IP (it was added with
+	// AddIPWithTraffic). Uplink and Downlink are the bytes moved since the entry
+	// was created; they only grow, and start again from zero once an offline
+	// entry is reclaimed.
+	Counted  bool
+	Uplink   int64
+	Downlink int64
+}
+
+// IPTrafficOnlineMap is an OnlineMap that also accounts bytes per source IP
+// (resline fork). It is an optional extension: callers type-assert for it and
+// fall back to plain OnlineMap behaviour.
+type IPTrafficOnlineMap interface {
+	OnlineMap
+	// AddIPWithTraffic is AddIP that also returns the uplink and downlink
+	// counters of IP. Both are nil for IPs that are not tracked (loopback).
+	AddIPWithTraffic(string) (uplink Counter, downlink Counter)
+	// ForEachTraffic calls fn for each IP that is online or still within its
+	// offline grace period. If fn returns false, iteration stops.
+	// The callback must not call AddIP/RemoveIP on the same OnlineMap (would deadlock).
+	ForEachTraffic(func(IPTraffic) bool)
+}
+
 // Channel is the interface for stats channel.
 //
 // xray:api:stable

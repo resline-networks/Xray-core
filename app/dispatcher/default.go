@@ -159,28 +159,18 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 	}
 
 	if user != nil && len(user.Email) > 0 {
-		p := d.policy.ForLevel(user.Level)
-		if p.Stats.UserUplink {
-			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
-			if c, _ := d.stats.GetOrRegisterCounter(name); c != nil {
-				inboundLink.Writer = &SizeStatWriter{
-					Counter: c,
-					Writer:  inboundLink.Writer,
-				}
+		uplink, downlink := userCounters(ctx, d.policy.ForLevel(user.Level), d.stats, user.Email, sessionInbound.Source.Address.String())
+		if uplink != nil {
+			inboundLink.Writer = &SizeStatWriter{
+				Counter: uplink,
+				Writer:  inboundLink.Writer,
 			}
 		}
-		if p.Stats.UserDownlink {
-			name := "user>>>" + user.Email + ">>>traffic>>>downlink"
-			if c, _ := d.stats.GetOrRegisterCounter(name); c != nil {
-				outboundLink.Writer = &SizeStatWriter{
-					Counter: c,
-					Writer:  outboundLink.Writer,
-				}
+		if downlink != nil {
+			outboundLink.Writer = &SizeStatWriter{
+				Counter: downlink,
+				Writer:  outboundLink.Writer,
 			}
-		}
-
-		if p.Stats.UserOnline {
-			trackOnlineIP(ctx, d.stats, user.Email, sessionInbound.Source.Address.String())
 		}
 	}
 
@@ -197,36 +187,67 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
 	link.Reader = &buf.TimeoutWrapperReader{Reader: link.Reader}
 
 	if user != nil && len(user.Email) > 0 {
-		p := policyManager.ForLevel(user.Level)
-		if p.Stats.UserUplink {
-			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
-			if c, _ := statsManager.GetOrRegisterCounter(name); c != nil {
-				link.Reader.(*buf.TimeoutWrapperReader).Counter = c
-			}
+		uplink, downlink := userCounters(ctx, policyManager.ForLevel(user.Level), statsManager, user.Email, sessionInbound.Source.Address.String())
+		if uplink != nil {
+			link.Reader.(*buf.TimeoutWrapperReader).Counter = uplink
 		}
-		if p.Stats.UserDownlink {
-			name := "user>>>" + user.Email + ">>>traffic>>>downlink"
-			if c, _ := statsManager.GetOrRegisterCounter(name); c != nil {
-				link.Writer = &SizeStatWriter{
-					Counter: c,
-					Writer:  link.Writer,
-				}
+		if downlink != nil {
+			link.Writer = &SizeStatWriter{
+				Counter: downlink,
+				Writer:  link.Writer,
 			}
-		}
-		if p.Stats.UserOnline {
-			trackOnlineIP(ctx, statsManager, user.Email, sessionInbound.Source.Address.String())
 		}
 	}
 
 	return link
 }
 
-func trackOnlineIP(ctx context.Context, sm stats.Manager, email, ip string) {
-	name := "user>>>" + email + ">>>online"
-	if om, _ := sm.GetOrRegisterOnlineMap(name); om != nil {
-		om.AddIP(ip)
-		context.AfterFunc(ctx, func() { om.RemoveIP(ip) })
+// userCounters returns what the bytes of one connection of email are added to,
+// per direction: the account counter (statsUserUplink / statsUserDownlink) and,
+// with statsUserOnline, the per source IP counter of the online map. Either
+// result is nil when nothing counts that direction.
+func userCounters(ctx context.Context, p policy.Session, sm stats.Manager, email, ip string) (uplink, downlink stats.Counter) {
+	var ipUplink, ipDownlink stats.Counter
+	if p.Stats.UserOnline {
+		ipUplink, ipDownlink = trackOnlineIP(ctx, sm, email, ip)
 	}
+	if p.Stats.UserUplink {
+		name := "user>>>" + email + ">>>traffic>>>uplink"
+		if c, _ := sm.GetOrRegisterCounter(name); c != nil {
+			uplink = c
+		}
+	}
+	if p.Stats.UserDownlink {
+		name := "user>>>" + email + ">>>traffic>>>downlink"
+		if c, _ := sm.GetOrRegisterCounter(name); c != nil {
+			downlink = c
+		}
+	}
+	if uplink != nil && ipUplink != nil && downlink != nil && ipDownlink != nil {
+		// The common case on a relay; one allocation for both directions.
+		pair := &[2]pairCounter{{a: uplink, b: ipUplink}, {a: downlink, b: ipDownlink}}
+		return &pair[0], &pair[1]
+	}
+	return joinCounters(uplink, ipUplink), joinCounters(downlink, ipDownlink)
+}
+
+// trackOnlineIP marks ip online for email until ctx ends, and returns the
+// uplink and downlink counters of that IP when the online map keeps them.
+// They are deliberately not registered as stats counters: 3x-ui sums every
+// user>>>…>>>traffic>>>… counter into account traffic.
+func trackOnlineIP(ctx context.Context, sm stats.Manager, email, ip string) (uplink, downlink stats.Counter) {
+	name := "user>>>" + email + ">>>online"
+	om, _ := sm.GetOrRegisterOnlineMap(name)
+	if om == nil {
+		return nil, nil
+	}
+	if tm, ok := om.(stats.IPTrafficOnlineMap); ok {
+		uplink, downlink = tm.AddIPWithTraffic(ip)
+	} else {
+		om.AddIP(ip)
+	}
+	context.AfterFunc(ctx, func() { om.RemoveIP(ip) })
+	return uplink, downlink
 }
 
 func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResult, request session.SniffingRequest, destination net.Destination) bool {

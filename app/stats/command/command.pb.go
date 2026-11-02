@@ -552,9 +552,15 @@ func (x *GetAllOnlineUsersResponse) GetUsers() []string {
 }
 
 type OnlineIPEntry struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ip            string                 `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
-	LastSeen      int64                  `protobuf:"varint,2,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Ip       string                 `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
+	LastSeen int64                  `protobuf:"varint,2,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`
+	// resline: bytes moved from this source IP since the entry was created.
+	// Cumulative (never reset by GetUsersStatsRequest.reset); they restart from
+	// zero when an offline entry is reclaimed or the core restarts.
+	// Unset (not 0) when the core does not count bytes for this IP.
+	Uplink        *int64 `protobuf:"varint,3,opt,name=uplink,proto3,oneof" json:"uplink,omitempty"`
+	Downlink      *int64 `protobuf:"varint,4,opt,name=downlink,proto3,oneof" json:"downlink,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -599,6 +605,20 @@ func (x *OnlineIPEntry) GetIp() string {
 func (x *OnlineIPEntry) GetLastSeen() int64 {
 	if x != nil {
 		return x.LastSeen
+	}
+	return 0
+}
+
+func (x *OnlineIPEntry) GetUplink() int64 {
+	if x != nil && x.Uplink != nil {
+		return *x.Uplink
+	}
+	return 0
+}
+
+func (x *OnlineIPEntry) GetDownlink() int64 {
+	if x != nil && x.Downlink != nil {
+		return *x.Downlink
 	}
 	return 0
 }
@@ -656,10 +676,14 @@ func (x *TrafficUserStat) GetDownlink() int64 {
 }
 
 type UserStat struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Email         string                 `protobuf:"bytes,1,opt,name=email,proto3" json:"email,omitempty"`
-	Ips           []*OnlineIPEntry       `protobuf:"bytes,2,rep,name=ips,proto3" json:"ips,omitempty"`
-	Traffic       *TrafficUserStat       `protobuf:"bytes,3,opt,name=traffic,proto3" json:"traffic,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Email   string                 `protobuf:"bytes,1,opt,name=email,proto3" json:"email,omitempty"`
+	Ips     []*OnlineIPEntry       `protobuf:"bytes,2,rep,name=ips,proto3" json:"ips,omitempty"`
+	Traffic *TrafficUserStat       `protobuf:"bytes,3,opt,name=traffic,proto3" json:"traffic,omitempty"`
+	// resline: source IPs with no open connection, kept for 30 minutes after the
+	// last one closed so their bytes can still be read. Only filled when
+	// GetUsersStatsRequest.include_offline_ips is set; never part of ips.
+	OfflineIps    []*OnlineIPEntry `protobuf:"bytes,4,rep,name=offline_ips,json=offlineIps,proto3" json:"offline_ips,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -715,12 +739,21 @@ func (x *UserStat) GetTraffic() *TrafficUserStat {
 	return nil
 }
 
+func (x *UserStat) GetOfflineIps() []*OnlineIPEntry {
+	if x != nil {
+		return x.OfflineIps
+	}
+	return nil
+}
+
 type GetUsersStatsRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	IncludeTraffic bool                   `protobuf:"varint,1,opt,name=include_traffic,json=includeTraffic,proto3" json:"include_traffic,omitempty"`
 	Reset_         bool                   `protobuf:"varint,2,opt,name=reset,proto3" json:"reset,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// resline: also list offline_ips, and users whose only IPs are offline.
+	IncludeOfflineIps bool `protobuf:"varint,3,opt,name=include_offline_ips,json=includeOfflineIps,proto3" json:"include_offline_ips,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *GetUsersStatsRequest) Reset() {
@@ -763,6 +796,13 @@ func (x *GetUsersStatsRequest) GetIncludeTraffic() bool {
 func (x *GetUsersStatsRequest) GetReset_() bool {
 	if x != nil {
 		return x.Reset_
+	}
+	return false
+}
+
+func (x *GetUsersStatsRequest) GetIncludeOfflineIps() bool {
+	if x != nil {
+		return x.IncludeOfflineIps
 	}
 	return false
 }
@@ -888,20 +928,27 @@ const file_app_stats_command_command_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\"\x1a\n" +
 	"\x18GetAllOnlineUsersRequest\"1\n" +
 	"\x19GetAllOnlineUsersResponse\x12\x14\n" +
-	"\x05users\x18\x01 \x03(\tR\x05users\"<\n" +
+	"\x05users\x18\x01 \x03(\tR\x05users\"\x92\x01\n" +
 	"\rOnlineIPEntry\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\tR\x02ip\x12\x1b\n" +
-	"\tlast_seen\x18\x02 \x01(\x03R\blastSeen\"E\n" +
+	"\tlast_seen\x18\x02 \x01(\x03R\blastSeen\x12\x1b\n" +
+	"\x06uplink\x18\x03 \x01(\x03H\x00R\x06uplink\x88\x01\x01\x12\x1f\n" +
+	"\bdownlink\x18\x04 \x01(\x03H\x01R\bdownlink\x88\x01\x01B\t\n" +
+	"\a_uplinkB\v\n" +
+	"\t_downlink\"E\n" +
 	"\x0fTrafficUserStat\x12\x16\n" +
 	"\x06uplink\x18\x01 \x01(\x03R\x06uplink\x12\x1a\n" +
-	"\bdownlink\x18\x02 \x01(\x03R\bdownlink\"\x9c\x01\n" +
+	"\bdownlink\x18\x02 \x01(\x03R\bdownlink\"\xe4\x01\n" +
 	"\bUserStat\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x127\n" +
 	"\x03ips\x18\x02 \x03(\v2%.xray.app.stats.command.OnlineIPEntryR\x03ips\x12A\n" +
-	"\atraffic\x18\x03 \x01(\v2'.xray.app.stats.command.TrafficUserStatR\atraffic\"U\n" +
+	"\atraffic\x18\x03 \x01(\v2'.xray.app.stats.command.TrafficUserStatR\atraffic\x12F\n" +
+	"\voffline_ips\x18\x04 \x03(\v2%.xray.app.stats.command.OnlineIPEntryR\n" +
+	"offlineIps\"\x85\x01\n" +
 	"\x14GetUsersStatsRequest\x12'\n" +
 	"\x0finclude_traffic\x18\x01 \x01(\bR\x0eincludeTraffic\x12\x14\n" +
-	"\x05reset\x18\x02 \x01(\bR\x05reset\"O\n" +
+	"\x05reset\x18\x02 \x01(\bR\x05reset\x12.\n" +
+	"\x13include_offline_ips\x18\x03 \x01(\bR\x11includeOfflineIps\"O\n" +
 	"\x15GetUsersStatsResponse\x126\n" +
 	"\x05users\x18\x01 \x03(\v2 .xray.app.stats.command.UserStatR\x05users\"\b\n" +
 	"\x06Config2\x86\x06\n" +
@@ -954,26 +1001,27 @@ var file_app_stats_command_command_proto_depIdxs = []int32{
 	16, // 2: xray.app.stats.command.GetStatsOnlineIpListResponse.ips:type_name -> xray.app.stats.command.GetStatsOnlineIpListResponse.IpsEntry
 	10, // 3: xray.app.stats.command.UserStat.ips:type_name -> xray.app.stats.command.OnlineIPEntry
 	11, // 4: xray.app.stats.command.UserStat.traffic:type_name -> xray.app.stats.command.TrafficUserStat
-	12, // 5: xray.app.stats.command.GetUsersStatsResponse.users:type_name -> xray.app.stats.command.UserStat
-	0,  // 6: xray.app.stats.command.StatsService.GetStats:input_type -> xray.app.stats.command.GetStatsRequest
-	0,  // 7: xray.app.stats.command.StatsService.GetStatsOnline:input_type -> xray.app.stats.command.GetStatsRequest
-	3,  // 8: xray.app.stats.command.StatsService.QueryStats:input_type -> xray.app.stats.command.QueryStatsRequest
-	5,  // 9: xray.app.stats.command.StatsService.GetSysStats:input_type -> xray.app.stats.command.SysStatsRequest
-	0,  // 10: xray.app.stats.command.StatsService.GetStatsOnlineIpList:input_type -> xray.app.stats.command.GetStatsRequest
-	8,  // 11: xray.app.stats.command.StatsService.GetAllOnlineUsers:input_type -> xray.app.stats.command.GetAllOnlineUsersRequest
-	13, // 12: xray.app.stats.command.StatsService.GetUsersStats:input_type -> xray.app.stats.command.GetUsersStatsRequest
-	2,  // 13: xray.app.stats.command.StatsService.GetStats:output_type -> xray.app.stats.command.GetStatsResponse
-	2,  // 14: xray.app.stats.command.StatsService.GetStatsOnline:output_type -> xray.app.stats.command.GetStatsResponse
-	4,  // 15: xray.app.stats.command.StatsService.QueryStats:output_type -> xray.app.stats.command.QueryStatsResponse
-	6,  // 16: xray.app.stats.command.StatsService.GetSysStats:output_type -> xray.app.stats.command.SysStatsResponse
-	7,  // 17: xray.app.stats.command.StatsService.GetStatsOnlineIpList:output_type -> xray.app.stats.command.GetStatsOnlineIpListResponse
-	9,  // 18: xray.app.stats.command.StatsService.GetAllOnlineUsers:output_type -> xray.app.stats.command.GetAllOnlineUsersResponse
-	14, // 19: xray.app.stats.command.StatsService.GetUsersStats:output_type -> xray.app.stats.command.GetUsersStatsResponse
-	13, // [13:20] is the sub-list for method output_type
-	6,  // [6:13] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	10, // 5: xray.app.stats.command.UserStat.offline_ips:type_name -> xray.app.stats.command.OnlineIPEntry
+	12, // 6: xray.app.stats.command.GetUsersStatsResponse.users:type_name -> xray.app.stats.command.UserStat
+	0,  // 7: xray.app.stats.command.StatsService.GetStats:input_type -> xray.app.stats.command.GetStatsRequest
+	0,  // 8: xray.app.stats.command.StatsService.GetStatsOnline:input_type -> xray.app.stats.command.GetStatsRequest
+	3,  // 9: xray.app.stats.command.StatsService.QueryStats:input_type -> xray.app.stats.command.QueryStatsRequest
+	5,  // 10: xray.app.stats.command.StatsService.GetSysStats:input_type -> xray.app.stats.command.SysStatsRequest
+	0,  // 11: xray.app.stats.command.StatsService.GetStatsOnlineIpList:input_type -> xray.app.stats.command.GetStatsRequest
+	8,  // 12: xray.app.stats.command.StatsService.GetAllOnlineUsers:input_type -> xray.app.stats.command.GetAllOnlineUsersRequest
+	13, // 13: xray.app.stats.command.StatsService.GetUsersStats:input_type -> xray.app.stats.command.GetUsersStatsRequest
+	2,  // 14: xray.app.stats.command.StatsService.GetStats:output_type -> xray.app.stats.command.GetStatsResponse
+	2,  // 15: xray.app.stats.command.StatsService.GetStatsOnline:output_type -> xray.app.stats.command.GetStatsResponse
+	4,  // 16: xray.app.stats.command.StatsService.QueryStats:output_type -> xray.app.stats.command.QueryStatsResponse
+	6,  // 17: xray.app.stats.command.StatsService.GetSysStats:output_type -> xray.app.stats.command.SysStatsResponse
+	7,  // 18: xray.app.stats.command.StatsService.GetStatsOnlineIpList:output_type -> xray.app.stats.command.GetStatsOnlineIpListResponse
+	9,  // 19: xray.app.stats.command.StatsService.GetAllOnlineUsers:output_type -> xray.app.stats.command.GetAllOnlineUsersResponse
+	14, // 20: xray.app.stats.command.StatsService.GetUsersStats:output_type -> xray.app.stats.command.GetUsersStatsResponse
+	14, // [14:21] is the sub-list for method output_type
+	7,  // [7:14] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_app_stats_command_command_proto_init() }
@@ -981,6 +1029,7 @@ func file_app_stats_command_command_proto_init() {
 	if File_app_stats_command_command_proto != nil {
 		return
 	}
+	file_app_stats_command_command_proto_msgTypes[10].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

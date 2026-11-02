@@ -89,7 +89,8 @@ func (s *statsServer) GetUsersStats(ctx context.Context, request *GetUsersStatsR
 	userMap := make(map[string]*UserStat)
 
 	s.stats.VisitOnlineMaps(func(name string, om feature_stats.OnlineMap) bool {
-		if om.Count() == 0 {
+		tm, withTraffic := om.(feature_stats.IPTrafficOnlineMap)
+		if om.Count() == 0 && !(withTraffic && request.IncludeOfflineIps) {
 			return true
 		}
 
@@ -97,14 +98,33 @@ func (s *statsServer) GetUsersStats(ctx context.Context, request *GetUsersStatsR
 		email, _, _ := strings.Cut(rest, ">>>")
 
 		user := &UserStat{Email: email}
-		om.ForEach(func(ip string, lastSeen int64) bool {
-			user.Ips = append(user.Ips, &OnlineIPEntry{
-				Ip:       ip,
-				LastSeen: lastSeen,
+		if withTraffic {
+			tm.ForEachTraffic(func(t feature_stats.IPTraffic) bool {
+				entry := &OnlineIPEntry{
+					Ip:       t.IP,
+					LastSeen: t.LastSeen,
+				}
+				if t.Counted {
+					entry.Uplink = &t.Uplink
+					entry.Downlink = &t.Downlink
+				}
+				if t.Online {
+					user.Ips = append(user.Ips, entry)
+				} else if request.IncludeOfflineIps {
+					user.OfflineIps = append(user.OfflineIps, entry)
+				}
+				return true
 			})
-			return true
-		})
-		if len(user.Ips) > 0 {
+		} else {
+			om.ForEach(func(ip string, lastSeen int64) bool {
+				user.Ips = append(user.Ips, &OnlineIPEntry{
+					Ip:       ip,
+					LastSeen: lastSeen,
+				})
+				return true
+			})
+		}
+		if len(user.Ips) > 0 || len(user.OfflineIps) > 0 {
 			userMap[email] = user
 		}
 		return true
